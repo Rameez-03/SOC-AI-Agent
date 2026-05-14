@@ -1,0 +1,90 @@
+services:
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: soc-ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - soc-ai-net
+
+  model-init:
+    image: ollama/ollama:latest
+    container_name: soc-model-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen2.5:14b}"]
+    networks:
+      - soc-ai-net
+    restart: "no"
+
+  soc-agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    container_name: soc-agent
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - WEBUI_URL=http://open-webui:8080
+    volumes:
+      - ./config:/app/config:ro
+      - agent-data:/app/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - soc-ai-net
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: soc-webui
+    ports:
+      - "8080:8080"
+    environment:
+      - OPENAI_API_BASE_URL=http://soc-agent:8000/v1
+      - OPENAI_API_KEY=soc-agent-key
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-change-this-secret}
+      - WEBUI_AUTH=true
+    volumes:
+      - webui-data:/app/backend/data
+    depends_on:
+      - soc-agent
+    restart: unless-stopped
+    networks:
+      - soc-ai-net
+
+volumes:
+  ollama-models:
+  webui-data:
+  agent-data:
+
+networks:
+  soc-ai-net:
+    driver: bridge
