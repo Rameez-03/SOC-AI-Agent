@@ -16,8 +16,10 @@ _TOKEN_TTL = 800
 
 
 class WazuhConnector(SIEMConnector):
-    def __init__(self, url: str, user: str, password: str, verify_ssl: bool = False):
+    def __init__(self, url: str, user: str, password: str, verify_ssl: bool = False,
+                 alerts_url: Optional[str] = None):
         self._url = url.rstrip("/")
+        self._alerts_url = alerts_url.rstrip("/") if alerts_url else None
         self._user = user
         self._password = password
         self._verify_ssl = verify_ssl
@@ -80,10 +82,12 @@ class WazuhConnector(SIEMConnector):
         }
 
         try:
+            base = self._alerts_url or self._url
+            req_headers = {} if self._alerts_url else headers
             async with httpx.AsyncClient(verify=self._verify_ssl, timeout=30) as client:
                 resp = await client.get(
-                    f"{self._url}/alerts",
-                    headers=headers,
+                    f"{base}/alerts",
+                    headers=req_headers,
                     params=params,
                 )
                 resp.raise_for_status()
@@ -124,10 +128,12 @@ class WazuhConnector(SIEMConnector):
         }
 
         try:
+            base = self._alerts_url or self._url
+            req_headers = {} if self._alerts_url else headers
             async with httpx.AsyncClient(verify=self._verify_ssl, timeout=30) as client:
                 resp = await client.get(
-                    f"{self._url}/alerts",
-                    headers=headers,
+                    f"{base}/alerts",
+                    headers=req_headers,
                     params=params,
                 )
                 resp.raise_for_status()
@@ -141,7 +147,7 @@ class WazuhConnector(SIEMConnector):
                         [f for f in filters if not f.startswith("rule.id")]
                         + [f"rule.id={rule_id}"]
                     )
-                    r2 = await client.get(f"{self._url}/alerts", headers=headers, params=p2)
+                    r2 = await client.get(f"{base}/alerts", headers=req_headers, params=p2)
                     if r2.status_code == 200:
                         all_items.extend(r2.json().get("data", {}).get("affected_items", []))
 

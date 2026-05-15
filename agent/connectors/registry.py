@@ -29,7 +29,9 @@ def get_siem_connector() -> Optional[SIEMConnector]:
             logger.warning("Wazuh connector: WAZUH_URL or WAZUH_PASSWORD not set — SIEM disabled")
             return None
         verify_ssl = os.getenv("WAZUH_VERIFY_SSL", "false").lower() != "false"
-        return WazuhConnector(url=url, user=user, password=password, verify_ssl=verify_ssl)
+        alerts_url = os.getenv("WAZUH_ALERTS_URL", "")
+        return WazuhConnector(url=url, user=user, password=password,
+                              verify_ssl=verify_ssl, alerts_url=alerts_url or None)
 
     if backend == "elastic":
         from .siem.elastic import ElasticConnector

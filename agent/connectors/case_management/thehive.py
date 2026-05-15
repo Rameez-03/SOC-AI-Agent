@@ -43,7 +43,7 @@ class TheHiveConnector(CaseConnector):
         body = {
             "query": [
                 {"_name": "listCase"},
-                {"_name": "filter", "_field": "status", "_value": "Open"},
+                {"_name": "filter", "_and": [{"_in": {"_field": "status", "_values": ["New", "InProgress"]}}]},
                 {"_name": "sort", "_fields": [{"_updatedAt": "desc"}]},
                 {"_name": "page", "from": 0, "to": 100},
             ]
@@ -51,7 +51,7 @@ class TheHiveConnector(CaseConnector):
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
-                    f"{self._url}/api/v1/case/_search",
+                    f"{self._url}/api/v1/query?name=list-cases",
                     headers=self._headers(),
                     json=body,
                 )
@@ -77,14 +77,15 @@ class TheHiveConnector(CaseConnector):
     async def _get_observables(self, case_id: str) -> list[Observable]:
         body = {
             "query": [
-                {"_name": "listObservable"},
-                {"_name": "filter", "_field": "_parent", "_value": case_id},
+                {"_name": "getCase", "idOrName": case_id},
+                {"_name": "observables"},
+                {"_name": "page", "from": 0, "to": 100},
             ]
         }
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(
-                    f"{self._url}/api/v1/observable/_search",
+                    f"{self._url}/api/v1/query?name=case-observables",
                     headers=self._headers(),
                     json=body,
                 )
@@ -103,21 +104,19 @@ class TheHiveConnector(CaseConnector):
             return []
 
     async def add_note(self, case_id: str, note: str) -> None:
-        body = {
-            "objectType": "case",
-            "objectId": case_id,
-            "message": note,
-        }
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(
-                    f"{self._url}/api/v1/comment",
+                    f"{self._url}/api/v1/case/{case_id}/comment",
                     headers=self._headers(),
-                    json=body,
+                    json={"message": note},
                 )
                 resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.error("TheHive add_note failed for case %s: HTTP %s — %s",
+                         case_id, exc.response.status_code, exc.response.text[:300])
         except Exception as exc:
-            logger.error("TheHive add_note failed for case %s: %s", case_id, exc)
+            logger.error("TheHive add_note failed for case %s: %r", case_id, exc)
 
     async def update_case(self, case_id: str, update: CaseUpdate) -> None:
         body: dict = {}
@@ -135,8 +134,11 @@ class TheHiveConnector(CaseConnector):
                     json=body,
                 )
                 resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.error("TheHive update_case failed for %s: HTTP %s — %s",
+                         case_id, exc.response.status_code, exc.response.text[:300])
         except Exception as exc:
-            logger.error("TheHive update_case failed for %s: %s", case_id, exc)
+            logger.error("TheHive update_case failed for %s: %r", case_id, exc)
 
     async def close_case(self, case_id: str, resolution: str) -> None:
         body = {
