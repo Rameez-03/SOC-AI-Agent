@@ -656,3 +656,30 @@ async def health():
         "soar": soar.name if soar else None,
         "processed_cases": len(processed),
     }
+
+
+@app.post("/run")
+async def run_now(force: bool = False):
+    """Trigger an immediate poll and process all open cases.
+    force=true clears processed state so all open cases are re-analysed.
+    """
+    if not cases:
+        raise HTTPException(status_code=503, detail="No case connector configured")
+    if force:
+        processed.clear()
+        _save_state()
+        logger.info("Forced run: processed state cleared")
+    open_cases = await cases.get_open_cases()
+    queued = []
+    skipped = []
+    for case in open_cases:
+        if _already_processed(case):
+            skipped.append(case.id)
+        else:
+            queued.append(case.id)
+            asyncio.create_task(_process_case(case))
+    return {
+        "open_cases": len(open_cases),
+        "queued": queued,
+        "skipped_already_processed": skipped,
+    }
