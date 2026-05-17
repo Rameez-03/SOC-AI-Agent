@@ -71,6 +71,8 @@ soar = None
 
 # case_id -> ISO timestamp of last processed updated_at
 processed: dict[str, str] = {}
+# cases currently being processed — prevents background loop + /run racing
+_in_flight: set = set()
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +116,16 @@ def _mark_processed(case: Case) -> None:
 # ---------------------------------------------------------------------------
 
 async def _process_case(case: Case) -> None:
+    if case.id in _in_flight:
+        return
+    _in_flight.add(case.id)
+    try:
+        await _do_process_case(case)
+    finally:
+        _in_flight.discard(case.id)
+
+
+async def _do_process_case(case: Case) -> None:
     logger.info("Processing case %s: %s", case.id, case.title)
 
     # 1. Fetch SIEM logs
@@ -154,7 +166,7 @@ async def _process_case(case: Case) -> None:
     pb_result = await playbook_runner.run(case, soar_connector=soar)
 
     # 6. Post findings note to case
-    findings_note = _build_findings_note(case, result, analysis, enrichment_results, pb_result)
+    findings_note = _build_findings_note(case, result, analysis, enrichment_results, pb_result, logs)
     if cases:
         await cases.add_note(case.id, findings_note)
         if result.severity >= ESCALATION_THRESHOLD:
@@ -167,7 +179,7 @@ async def _process_case(case: Case) -> None:
     logger.info("Case %s processing complete", case.id)
 
 
-def _build_findings_note(case, triage_r, analysis, enrichment_results, pb_result) -> str:
+def _build_findings_note(case, triage_r, analysis, enrichment_results, pb_result, logs) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         f"## 🤖 SOC Agent Analysis — {now}",
@@ -175,7 +187,7 @@ def _build_findings_note(case, triage_r, analysis, enrichment_results, pb_result
         f"(confidence: {triage_r.confidence:.0%})",
         f"**Kill Chain Stage:** {analysis.kill_chain_stage}",
         "",
-        f"### Summary",
+        "### Summary",
         analysis.summary,
         "",
     ]
@@ -184,6 +196,22 @@ def _build_findings_note(case, triage_r, analysis, enrichment_results, pb_result
         lines.append("### MITRE ATT&CK")
         for m in analysis.mitre_ttps:
             lines.append(f"- **{m.get('id')}** — {m.get('name')}: {m.get('evidence', '')}")
+        lines.append("")
+
+    # SIEM evidence — the actual log entries the analysis is based on
+    if logs:
+        lines.append(f"### SIEM Evidence ({len(logs)} log entries)")
+        lines.append("| Timestamp | Rule | Agent | Process | Message |")
+        lines.append("|-----------|------|-------|---------|---------|")
+        for log in logs[:20]:
+            ts = log.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            rule = f"{log.rule_id} — {log.rule_name}" if log.rule_name else (log.rule_id or "")
+            agent = log.agent_name or ""
+            process = log.process or ""
+            msg = (log.message or "")[:80].replace("|", "\\|")
+            lines.append(f"| `{ts}` | {rule} | {agent} | {process} | {msg} |")
+        if len(logs) > 20:
+            lines.append(f"| ... | {len(logs) - 20} more entries | | | |")
         lines.append("")
 
     if enrichment_results:
@@ -196,12 +224,22 @@ def _build_findings_note(case, triage_r, analysis, enrichment_results, pb_result
 
     if analysis.recommended_containment:
         lines.append("### Recommended Actions")
-        for r in analysis.recommended_containment:
-            lines.append(f"- {r}")
+        # Attach specific log evidence to each action where possible
+        agents = list({l.agent_name for l in logs if l.agent_name})
+        processes = list({l.process for l in logs if l.process})
+        first_ts = logs[0].timestamp.strftime("%Y-%m-%d %H:%M:%S UTC") if logs else None
+        for i, action in enumerate(analysis.recommended_containment, 1):
+            lines.append(f"{i}. {action}")
+            if i == 1 and agents:
+                lines.append(f"   - *Affected host(s): **{', '.join(agents)}***")
+            if i == 1 and first_ts:
+                lines.append(f"   - *First seen: `{first_ts}` — see SIEM Evidence table above*")
+            if processes and i <= len(processes):
+                lines.append(f"   - *Related process: `{processes[i-1]}`*")
         lines.append("")
 
     if analysis.analyst_notes:
-        lines.append(f"### Notes\n{analysis.analyst_notes}")
+        lines.append(f"### Analyst Notes\n{analysis.analyst_notes}")
 
     return "\n".join(lines)
 
@@ -221,7 +259,7 @@ async def _background_loop() -> None:
                 open_cases = await cases.get_open_cases()
                 logger.info("Poll: %d open cases found", len(open_cases))
                 for case in open_cases:
-                    if _already_processed(case):
+                    if _already_processed(case) or case.id in _in_flight:
                         continue
                     try:
                         await _process_case(case)
