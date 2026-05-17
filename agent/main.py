@@ -129,13 +129,14 @@ async def _process_case(case: Case) -> None:
     result = await triage_module.classify_case(case, logs, llm)
     logger.info("Case %s classified as: %s (%.0f%%)", case.id, result.classification, result.confidence * 100)
 
-    # 3. False positive — auto-document and close
+    # 3. False positive — document with evidence and flag for analyst approval (no auto-close)
     if result.classification == "false_positive" and result.confidence >= 0.8:
-        note = await report_writer.generate_false_positive_note(case, result, llm)
+        note = await report_writer.generate_false_positive_note(case, result, logs, llm)
         if cases:
             await cases.add_note(case.id, note)
-            await cases.close_case(case.id, result.reasoning)
-        logger.info("Case %s auto-closed as false positive", case.id)
+            await cases.update_case(case.id, CaseUpdate(status="InProgress"))
+        await notifier.send_fp_review_alert(case, result, logs)
+        logger.info("Case %s flagged as false positive — awaiting analyst approval to close", case.id)
         _mark_processed(case)
         return
 
@@ -160,7 +161,7 @@ async def _process_case(case: Case) -> None:
             await cases.update_case(case.id, CaseUpdate(status="InProgress"))
 
     # 7. Alert analyst via WebUI
-    await notifier.send_tp_alert(case, result, analysis.summary)
+    await notifier.send_tp_alert(case, result, analysis, enrichment_results, logs)
 
     _mark_processed(case)
     logger.info("Case %s processing complete", case.id)

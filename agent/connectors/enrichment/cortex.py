@@ -34,16 +34,16 @@ class CortexConnector(EnrichmentConnector):
         return "cortex"
 
     def _headers(self) -> dict:
-        return {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
+        return {"Authorization": f"Bearer {self._api_key}"}
+
+    def _json_headers(self) -> dict:
+        return {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
 
     async def is_available(self) -> bool:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
-                    f"{self._url}/api/analyzer",
+                    f"{self._url}/api/analyzer?range=all",
                     headers=self._headers(),
                 )
                 return resp.status_code == 200
@@ -56,7 +56,10 @@ class CortexConnector(EnrichmentConnector):
             return self._available_analyzers
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(f"{self._url}/api/analyzer", headers=self._headers())
+                resp = await client.get(
+                    f"{self._url}/api/analyzer?range=all",
+                    headers=self._headers(),
+                )
                 resp.raise_for_status()
                 self._available_analyzers = {a["name"] for a in resp.json()}
                 return self._available_analyzers
@@ -65,8 +68,11 @@ class CortexConnector(EnrichmentConnector):
             return set()
 
     async def enrich(self, ioc: IOC) -> EnrichmentResult:
+        if ioc.type not in _ANALYZER_MAP:
+            logger.debug("Skipping enrichment for unsupported IOC type=%s", ioc.type)
+            return EnrichmentResult(ioc=ioc, source="cortex", verdict="unknown", details={"error": "unsupported type"})
         available = await self._get_available_analyzers()
-        wanted = _ANALYZER_MAP.get(ioc.type, ["VirusTotal_GetReport_3_1"])
+        wanted = _ANALYZER_MAP[ioc.type]
         runnable = [a for a in wanted if a in available]
 
         if not runnable:
@@ -97,7 +103,7 @@ class CortexConnector(EnrichmentConnector):
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(
                     f"{self._url}/api/analyzer/{analyzer_name}/run",
-                    headers=self._headers(),
+                    headers=self._json_headers(),
                     json=body,
                 )
                 resp.raise_for_status()
@@ -123,7 +129,7 @@ class CortexConnector(EnrichmentConnector):
                 if status == "Success":
                     report_resp = await client.get(
                         f"{self._url}/api/job/{job_id}/report",
-                        headers=self._headers(),
+                        headers=self._headers(),  # GET — no Content-Type
                     )
                     return report_resp.json() if report_resp.status_code == 200 else data
                 if status in ("Failure", "Deleted"):

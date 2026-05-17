@@ -37,7 +37,7 @@ class LLMClient:
             "options": {"temperature": temperature, "num_ctx": 8192},
             "keep_alive": self._keep_alive,
         }
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=300) as client:
             resp = await client.post(f"{self._base_url}/api/chat", json=body)
             resp.raise_for_status()
             return resp.json()["message"]["content"]

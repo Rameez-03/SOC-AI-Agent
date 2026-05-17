@@ -51,6 +51,7 @@ class LogEntry:
     dest_ip: Optional[str] = None
     process: Optional[str] = None
     command_line: Optional[str] = None
+    message: Optional[str] = None
     mitre_ids: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict)
 

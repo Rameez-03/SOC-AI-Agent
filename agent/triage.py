@@ -36,6 +36,7 @@ Respond with this exact JSON structure:
   "iocs": [
     {{"type": "ip|domain|hash|url|filename|username", "value": "..."}}
   ],
+  "ioc_note": "Only extract real threat indicators — IPs, domains, hashes, filenames. Never extract agent names, hostnames, or rule IDs as IOCs.",
   "mitre_ttps": ["T1059.001", "..."],
   "recommended_action": "what should happen next"
 }}
@@ -79,6 +80,8 @@ def _summarise_logs(logs: list[LogEntry], max_entries: int = 20) -> str:
             parts.append(f"SrcIP: {log.source_ip}")
         if log.mitre_ids:
             parts.append(f"MITRE: {','.join(log.mitre_ids)}")
+        if log.message:
+            parts.append(f"MSG: {log.message}")
         lines.append(" | ".join(parts))
     if len(logs) > max_entries:
         lines.append(f"... and {len(logs) - max_entries} more entries")

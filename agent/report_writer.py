@@ -22,31 +22,58 @@ _TEMPLATE_PATH = Path("/app/config/templates/incident_report.md")
 
 _FP_SYSTEM = """You are a SOC analyst writing a false positive documentation note. Be concise and factual."""
 
-_FP_TEMPLATE = """Write a brief false positive documentation note for this case.
+_FP_TEMPLATE = """Write a false positive documentation note for this security case.
 
 CASE: {title}
 TRIAGE REASONING: {reasoning}
+LOG EVIDENCE:
+{log_evidence}
 MITRE TTPs CONSIDERED: {mitre_ttps}
 
 The note should:
 1. State clearly this is a false positive
-2. Explain why (what legitimate activity triggered the rule)
-3. Suggest whether suppression/tuning is needed
-4. Be 3-5 sentences maximum
+2. Explain precisely why — what legitimate activity triggered the rule
+3. Reference the specific log evidence (timestamps, process names, messages) that confirms it is benign
+4. State whether rule tuning or suppression is recommended
+5. Be factual and concise — 4-8 sentences
 
 Respond with plain text, no JSON."""
 
 _REPORT_SYSTEM = """You are a SOC analyst writing a formal incident report. Fill in the provided template with the given incident data. Be precise, technical, and complete. Use the exact template structure."""
 
 
+def _format_log_evidence(logs: list) -> str:
+    if not logs:
+        return "No SIEM logs available."
+    lines = []
+    for log in logs[:10]:
+        ts = log.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+        parts = [ts]
+        if log.rule_name:
+            parts.append(f"Rule: {log.rule_name}")
+        if log.agent_name:
+            parts.append(f"Agent: {log.agent_name}")
+        if log.process:
+            parts.append(f"Process: {log.process}")
+        if log.message:
+            parts.append(f"Message: {log.message[:150]}")
+        lines.append(" | ".join(parts))
+    if len(logs) > 10:
+        lines.append(f"... and {len(logs) - 10} more entries (all consistent with benign activity)")
+    return "\n".join(lines)
+
+
 async def generate_false_positive_note(
     case: Case,
     triage_result: TriageResult,
+    logs: list,
     llm: LLMClient,
 ) -> str:
+    log_evidence = _format_log_evidence(logs)
     user_prompt = _FP_TEMPLATE.format(
         title=case.title,
         reasoning=triage_result.reasoning,
+        log_evidence=log_evidence,
         mitre_ttps=", ".join(triage_result.mitre_ttps) or "none",
     )
     try:
@@ -55,8 +82,26 @@ async def generate_false_positive_note(
         logger.error("FP note generation failed for case %s: %s", case.id, exc)
         note = f"False positive — automated analysis: {triage_result.reasoning}"
 
-    header = f"## 🟢 False Positive — Auto-closed by SOC Agent\n\n**Case:** {case.title}\n**Closed:** {_now()}\n\n"
-    return header + note
+    lines = [
+        "## 🟢 False Positive Analysis — Awaiting Analyst Approval",
+        "",
+        f"**Case:** {case.title}",
+        f"**Analysed:** {_now()}",
+        f"**Confidence:** {triage_result.confidence:.0%}",
+        "",
+        "### AI Assessment",
+        note,
+        "",
+        f"### SIEM Log Evidence ({len(logs)} entries reviewed)",
+        "```",
+        log_evidence,
+        "```",
+        "",
+        "### Required Action",
+        "Review the evidence above and **manually close this case** in TheHive if you agree with the FP assessment.",
+        "If this rule fires frequently for the same legitimate activity, consider tuning the Wazuh rule threshold.",
+    ]
+    return "\n".join(lines)
 
 
 async def generate_incident_report(

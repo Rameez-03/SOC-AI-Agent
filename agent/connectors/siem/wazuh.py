@@ -186,8 +186,20 @@ class WazuhConnector(SIEMConnector):
         data = item.get("data", {})
         win = data.get("win", {})
         edata = win.get("eventdata", {})
+        esys = win.get("system", {})
         mitre = rule.get("mitre", {})
         ts = self._parse_ts(item.get("timestamp", ""))
+
+        # Best-effort message: Windows system message > full_log > rule description
+        message = (
+            esys.get("message")
+            or item.get("full_log")
+            or edata.get("data")
+            or rule.get("description")
+        )
+        if message:
+            message = str(message)[:300]
+
         return LogEntry(
             id=item.get("id", ""),
             timestamp=ts,
@@ -199,6 +211,7 @@ class WazuhConnector(SIEMConnector):
             dest_ip=edata.get("destinationIp"),
             process=edata.get("image") or edata.get("parentImage"),
             command_line=edata.get("commandLine"),
+            message=message,
             mitre_ids=mitre.get("id", []) if isinstance(mitre, dict) else [],
             raw=item,
         )
